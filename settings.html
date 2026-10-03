@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<title>Settings | Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html">Tasks</a>
+      <a href="edit.html">+ New</a>
+      <a href="completed.html">Completed</a>
+      <a href="import.html">Import</a>
+      <a href="settings.html" aria-current="page">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>Settings</h2>
+  <div id="status"></div>
+  <div id="content">Loading&hellip;</div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const contentEl = document.getElementById('content');
+
+  const SETTINGS = [
+    { key: 'maps.provider', label: 'Preferred maps app', hint: 'Used by Navigate.',
+      options: [['ask', 'Ask every time'], ['apple', 'Apple Maps'], ['google', 'Google Maps']] },
+    { key: 'calendar.provider', label: 'Preferred calendar', hint: 'Used by Add to Calendar.',
+      options: [['ask', 'Ask every time'], ['apple', 'Apple Calendar'], ['google', 'Google Calendar']] },
+    { key: 'default.reminder', label: 'Default reminder', hint: 'Pre-selected on new tasks.',
+      options: [['none', 'None'], ...REMINDER_CHOICES.map(c => [c.value, c.label])] },
+  ];
+
+  function render() {
+    const c = MdwPrefs.cache;
+    contentEl.innerHTML = SETTINGS.map(s => {
+      const appOnly = Object.prototype.hasOwnProperty.call(c.appOverrides, s.key);
+      const value = c.effective[s.key];
+      return `
+        <div class="card" data-key="${s.key}">
+          <label for="sel-${s.key}" style="margin-top:0">${s.label}</label>
+          <select id="sel-${s.key}">
+            ${s.options.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <div class="row" style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.6rem">
+            <label class="inline"><input type="radio" name="scope-${s.key}" value="global" ${appOnly ? '' : 'checked'}> All my apps</label>
+            <label class="inline"><input type="radio" name="scope-${s.key}" value="app" ${appOnly ? 'checked' : ''}> Only Task Tap</label>
+          </div>
+          <p class="muted small" style="margin:0.4rem 0 0">${s.hint}</p>
+        </div>`;
+    }).join('') + `
+      <p class="muted small">"All my apps" settings are shared with your other MyDataWorld apps (like Life Tempo and the Member App) as they start using them. Choosing "Remember my choice" in a Maps or Calendar prompt saves it here for all your apps.</p>`;
+
+    contentEl.querySelectorAll('[data-key]').forEach(card => {
+      const key = card.dataset.key;
+      const sel = card.querySelector('select');
+      const scope = () => card.querySelector('input[type="radio"]:checked').value;
+      sel.addEventListener('change', () => save(async () => {
+        if (scope() === 'app') {
+          await MdwPrefs.set('app', key, sel.value);
+        } else {
+          await MdwPrefs.set('global', key, sel.value);
+        }
+      }));
+      card.querySelectorAll('input[type="radio"]').forEach(r => r.addEventListener('change', () => save(async () => {
+        if (r.value === 'app') {
+          // Start the Task Tap-only setting from what's showing now.
+          await MdwPrefs.set('app', key, sel.value);
+        } else {
+          // Drop the override; the shared setting applies again.
+          await MdwPrefs.set('app', key, '');
+          await MdwPrefs.load();
+        }
+      })));
+    });
+  }
+
+  async function save(work) {
+    try {
+      await work();
+      showStatus('');
+      render();
+      flash('Saved');
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't save that setting. Try again."));
+    }
+  }
+
+  function flash(text) {
+    const n = document.createElement('div');
+    n.className = 'note';
+    n.textContent = text;
+    n.style.marginBottom = '0.8rem';
+    contentEl.prepend(n);
+    setTimeout(() => n.remove(), 1500);
+  }
+
+  (async () => {
+    await captureSso();
+    if (!getToken()) { handleError(contentEl, new Error('not-authorized')); return; }
+    await initPrefs();
+    render();
+  })();
+</script>
+</body>
+</html>

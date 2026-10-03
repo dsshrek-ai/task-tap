@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<title>Edit | Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html">Tasks</a>
+      <a href="edit.html" id="nav-new">+ New</a>
+      <a href="completed.html">Completed</a>
+      <a href="import.html">Import</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <div id="status"></div>
+  <div id="content">Loading&hellip;</div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const contentEl = document.getElementById('content');
+  const editId = Number(new URLSearchParams(location.search).get('id')) || 0;
+  if (!editId) document.getElementById('nav-new').setAttribute('aria-current', 'page');
+  let checklist = []; // [{ Id, Description, Done }]
+
+  function v(id) { return document.getElementById(id).value.trim(); }
+
+  function checklistHtml() {
+    return checklist.map((c, i) => `
+      <div class="cl-row">
+        <input type="text" data-cl="${i}" value="${escapeHtml(c.Description)}" maxlength="300" aria-label="Checklist item ${i + 1}">
+        <button type="button" class="icon-btn" data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move up" title="Move up">▲</button>
+        <button type="button" class="icon-btn" data-down="${i}" ${i === checklist.length - 1 ? 'disabled' : ''} aria-label="Move down" title="Move down">▼</button>
+        <button type="button" class="icon-btn" data-del="${i}" aria-label="Remove item" title="Remove">✕</button>
+      </div>`).join('');
+  }
+
+  function renderChecklist() {
+    const box = document.getElementById('cl-list');
+    box.innerHTML = checklistHtml();
+    box.querySelectorAll('[data-cl]').forEach(inp => inp.addEventListener('input', () => { checklist[Number(inp.dataset.cl)].Description = inp.value; }));
+    box.querySelectorAll('[data-up]').forEach(b => b.addEventListener('click', () => move(Number(b.dataset.up), -1)));
+    box.querySelectorAll('[data-down]').forEach(b => b.addEventListener('click', () => move(Number(b.dataset.down), 1)));
+    box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { checklist.splice(Number(b.dataset.del), 1); renderChecklist(); }));
+  }
+
+  function move(i, dir) {
+    const j = i + dir;
+    [checklist[i], checklist[j]] = [checklist[j], checklist[i]];
+    renderChecklist();
+  }
+
+  function addChecklistItem() {
+    const inp = document.getElementById('cl-new');
+    const text = inp.value.trim();
+    if (!text) return;
+    checklist.push({ Id: 0, Description: text, Done: false });
+    inp.value = '';
+    renderChecklist();
+    inp.focus();
+  }
+
+  // Map a saved repeat rule onto the simple choice, or Custom when it uses
+  // an interval/weekdays/day-of-month.
+  function repeatChoice(r) {
+    if (!r) return 'None';
+    const simple = r.Interval === 1 && !r.DaysOfWeek.length && !r.DayOfMonth;
+    return simple ? r.Frequency : 'Custom';
+  }
+
+  function render(t, defaultReminder) {
+    t = t || {};
+    const r = t.Reminder;
+    let reminderValue = 'none';
+    if (r) reminderValue = r.OffsetMinutes === null ? 'custom' : String(r.OffsetMinutes);
+    else if (!t.Id && defaultReminder && defaultReminder !== 'none') reminderValue = defaultReminder;
+    const rep = t.Repeat;
+    const repChoice = repeatChoice(rep);
+    const unit = rep ? rep.Frequency : 'Weekly';
+    const days = rep ? rep.DaysOfWeek : [];
+
+    contentEl.innerHTML = `
+      <h2 style="margin-top:0">${t.Id ? 'Edit task' : 'New task'}</h2>
+      <form class="card" id="form" autocomplete="off">
+        <label for="f-title">What needs doing?</label>
+        <input type="text" id="f-title" maxlength="200" required value="${escapeHtml(t.Title || '')}" placeholder="e.g. Sleep Study">
+
+        <div class="grid2">
+          <div>
+            <label for="f-date">Date <span class="muted small">(optional)</span></label>
+            <input type="date" id="f-date" value="${t.Date || ''}">
+            <div class="days">
+              <button type="button" class="btn secondary small" data-date="0">Today</button>
+              <button type="button" class="btn secondary small" data-date="1">Tomorrow</button>
+              <button type="button" class="btn secondary small" data-date="">No date</button>
+            </div>
+          </div>
+          <div>
+            <label for="f-start">Start time</label>
+            <input type="time" id="f-start" value="${t.StartTime || ''}">
+          </div>
+          <div>
+            <label for="f-end">End time</label>
+            <input type="time" id="f-end" value="${t.EndTime || ''}">
+          </div>
+          <div>
+            <label for="f-leave">Leave by</label>
+            <input type="time" id="f-leave" value="${t.LeaveByTime || ''}">
+          </div>
+        </div>
+        <label class="inline" style="margin-top:0.9rem"><input type="checkbox" id="f-pinned" ${t.Pinned ? 'checked' : ''}> 📌 Pin to the top</label>
+
+        <fieldset>
+          <legend>Contact</legend>
+          <div class="grid2">
+            <div><label for="f-contact">Name</label><input type="text" id="f-contact" maxlength="150" value="${escapeHtml(t.ContactName || '')}"></div>
+            <div><label for="f-phone">Phone</label><input type="tel" id="f-phone" maxlength="40" value="${escapeHtml(t.PhoneNumber || '')}"></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Address</legend>
+          <label for="f-a1">Street</label><input type="text" id="f-a1" maxlength="200" value="${escapeHtml(t.Address1 || '')}">
+          <label for="f-a2">Suite / unit <span class="muted small">(optional)</span></label><input type="text" id="f-a2" maxlength="200" value="${escapeHtml(t.Address2 || '')}">
+          <div class="grid2">
+            <div><label for="f-city">City</label><input type="text" id="f-city" maxlength="100" value="${escapeHtml(t.City || '')}"></div>
+            <div><label for="f-state">State</label><input type="text" id="f-state" maxlength="50" value="${escapeHtml(t.State || '')}"></div>
+            <div><label for="f-zip">ZIP</label><input type="text" id="f-zip" maxlength="20" value="${escapeHtml(t.PostalCode || '')}"></div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Checklist</legend>
+          <div id="cl-list"></div>
+          <div class="cl-row">
+            <input type="text" id="cl-new" maxlength="300" placeholder="Add an item, e.g. Bring insurance card" aria-label="New checklist item">
+            <button type="button" class="btn secondary small" id="cl-add">Add</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Reminder</legend>
+          <select id="f-reminder" aria-label="Reminder">
+            <option value="none">None</option>
+            ${REMINDER_CHOICES.map(c => `<option value="${c.value}" ${reminderValue === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
+            <option value="custom" ${reminderValue === 'custom' ? 'selected' : ''}>Custom date &amp; time…</option>
+          </select>
+          <div id="reminder-custom" style="display:none">
+            <label for="f-reminder-at">Remind me at</label>
+            <input type="datetime-local" id="f-reminder-at" value="${r && r.OffsetMinutes === null ? r.At.replace(' ', 'T') : ''}">
+          </div>
+          <p class="muted small" style="margin:0.5rem 0 0">Your phone alerts you when you add the task to your calendar; Task Tap also shows due reminders when it's open.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Repeat</legend>
+          <select id="f-repeat" aria-label="Repeat">
+            ${['None', 'Daily', 'Weekly', 'Monthly', 'Yearly', 'Custom'].map(o => `<option ${o === repChoice ? 'selected' : ''}>${o}</option>`).join('')}
+          </select>
+          <div id="repeat-custom" style="display:none">
+            <div class="grid2">
+              <div><label for="f-interval">Every</label><input type="number" id="f-interval" min="1" max="366" value="${rep ? rep.Interval : 1}"></div>
+              <div><label for="f-unit">Unit</label>
+                <select id="f-unit">
+                  ${[['Daily', 'days'], ['Weekly', 'weeks'], ['Monthly', 'months'], ['Yearly', 'years']].map(([f, l]) => `<option value="${f}" ${f === unit ? 'selected' : ''}>${l}</option>`).join('')}
+                </select></div>
+            </div>
+            <div id="repeat-days">
+              <label>On</label>
+              <div class="days">${[1, 2, 3, 4, 5, 6, 7].map(n => `<label class="toggle"><input type="checkbox" class="f-dow" value="${n}" ${days.includes(n) ? 'checked' : ''}><span>${WEEKDAY_SHORT[n]}</span></label>`).join('')}</div>
+            </div>
+            <div id="repeat-dom">
+              <label for="f-dom">Day of month <span class="muted small">(optional)</span></label>
+              <input type="number" id="f-dom" min="1" max="31" value="${rep && rep.DayOfMonth ? rep.DayOfMonth : ''}" style="max-width:7rem">
+            </div>
+          </div>
+          <div id="repeat-ends" style="display:none">
+            <div class="grid2">
+              <div><label for="f-rep-end">Stop after date <span class="muted small">(optional)</span></label><input type="date" id="f-rep-end" value="${rep && rep.EndDate ? rep.EndDate : ''}"></div>
+              <div><label for="f-rep-max">Or after this many times</label><input type="number" id="f-rep-max" min="1" value="${rep && rep.MaxOccurrences ? rep.MaxOccurrences : ''}"></div>
+            </div>
+            <p class="muted small" style="margin:0.5rem 0 0">When you complete it, the next one is created from its due date.</p>
+          </div>
+        </fieldset>
+
+        <label for="f-notes">Notes</label>
+        <textarea id="f-notes" maxlength="10000">${escapeHtml(t.Notes || '')}</textarea>
+        ${t.Id ? '' : '<p class="muted small">Add photos or files from the task page after saving.</p>'}
+
+        <div id="f-error" class="field-error"></div>
+        <div class="form-actions">
+          <button type="submit" class="btn" id="f-save">${t.Id ? 'Save' : 'Add task'}</button>
+          <a class="btn secondary" href="${t.Id ? 'task.html?id=' + t.Id : 'index.html'}">Cancel</a>
+        </div>
+      </form>`;
+
+    renderChecklist();
+    wire();
+  }
+
+  function updateVisibility() {
+    document.getElementById('reminder-custom').style.display = v('f-reminder') === 'custom' ? 'block' : 'none';
+    const rep = v('f-repeat');
+    document.getElementById('repeat-custom').style.display = rep === 'Custom' ? 'block' : 'none';
+    document.getElementById('repeat-ends').style.display = rep === 'None' ? 'none' : 'block';
+    const unit = v('f-unit');
+    document.getElementById('repeat-days').style.display = unit === 'Weekly' ? 'block' : 'none';
+    document.getElementById('repeat-dom').style.display = unit === 'Monthly' ? 'block' : 'none';
+  }
+
+  function wire() {
+    document.querySelectorAll('[data-date]').forEach(b => b.addEventListener('click', () => {
+      document.getElementById('f-date').value = b.dataset.date === '' ? '' : todayYmd(Number(b.dataset.date));
+    }));
+    document.getElementById('cl-add').addEventListener('click', addChecklistItem);
+    document.getElementById('cl-new').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addChecklistItem(); } });
+    ['f-reminder', 'f-repeat', 'f-unit'].forEach(id => document.getElementById(id).addEventListener('change', updateVisibility));
+    document.getElementById('form').addEventListener('submit', submit);
+    updateVisibility();
+    if (!editId) document.getElementById('f-title').focus();
+  }
+
+  function collect() {
+    const reminderSel = v('f-reminder');
+    let reminder = null;
+    if (reminderSel === 'custom') reminder = { customAt: v('f-reminder-at') };
+    else if (reminderSel !== 'none') reminder = { offsetMinutes: Number(reminderSel) };
+
+    const repSel = v('f-repeat');
+    let repeat = null;
+    if (repSel !== 'None') {
+      repeat = repSel === 'Custom'
+        ? { frequency: v('f-unit'), interval: Number(v('f-interval')) || 1,
+            daysOfWeek: [...document.querySelectorAll('.f-dow')].filter(x => x.checked).map(x => Number(x.value)),
+            dayOfMonth: v('f-dom') }
+        : { frequency: repSel, interval: 1 };
+      repeat.endDate = v('f-rep-end');
+      repeat.maxOccurrences = v('f-rep-max');
+    }
+
+    // Pick up anything typed in the "add" box but not yet added.
+    const pending = v('cl-new');
+    if (pending) checklist.push({ Id: 0, Description: pending, Done: false });
+
+    return {
+      id: editId,
+      title: v('f-title'),
+      date: v('f-date'),
+      startTime: v('f-start'),
+      endTime: v('f-end'),
+      leaveByTime: v('f-leave'),
+      pinned: document.getElementById('f-pinned').checked,
+      contactName: v('f-contact'),
+      phoneNumber: v('f-phone'),
+      address1: v('f-a1'),
+      address2: v('f-a2'),
+      city: v('f-city'),
+      state: v('f-state'),
+      postalCode: v('f-zip'),
+      notes: document.getElementById('f-notes').value,
+      checklist: checklist.filter(c => c.Description.trim()).map(c => ({ id: c.Id, description: c.Description.trim(), done: c.Done })),
+      reminder,
+      repeat,
+    };
+  }
+
+  async function submit(ev) {
+    ev.preventDefault();
+    const err = document.getElementById('f-error');
+    const data = collect();
+    err.textContent = '';
+    if (!data.title) { err.textContent = 'Give the task a title.'; return; }
+    if (data.reminder && data.reminder.offsetMinutes !== undefined && !data.date) {
+      err.textContent = 'A "before the task" reminder needs a date. Add a date or choose a custom reminder time.'; return;
+    }
+    if (data.reminder && data.reminder.customAt === '') { err.textContent = 'Pick the reminder date and time.'; return; }
+    if (data.repeat && !data.date) { err.textContent = 'A repeating task needs a date.'; return; }
+    const btn = document.getElementById('f-save');
+    btn.disabled = true;
+    try {
+      const res = await postAction('saveTask', data);
+      location.href = `task.html?id=${res.Id}`;
+    } catch (e) {
+      btn.disabled = false;
+      err.textContent = errorText(e, "Couldn't save. Try again.");
+    }
+  }
+
+  (async () => {
+    await captureSso();
+    try {
+      if (editId) {
+        const [res] = await Promise.all([fetchData('task', { id: editId }), initPrefs()]);
+        checklist = res.Task.Checklist.map(c => ({ ...c }));
+        render(res.Task);
+      } else {
+        await initPrefs();
+        render(null, MdwPrefs.get('default.reminder', 'none'));
+      }
+    } catch (e) {
+      handleError(contentEl, e);
+    }
+  })();
+</script>
+</body>
+</html>

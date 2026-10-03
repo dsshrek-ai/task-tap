@@ -1,0 +1,3 @@
+api/config.php
+api/uploads/*
+!api/uploads/.htaccess

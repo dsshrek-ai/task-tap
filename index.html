@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Task Tap">
+<title>Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html" aria-current="page">Tasks</a>
+      <a href="edit.html">+ New</a>
+      <a href="completed.html">Completed</a>
+      <a href="import.html">Import</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <div id="status"></div>
+  <div id="reminders"></div>
+  <div id="content">Loading&hellip;</div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const contentEl = document.getElementById('content');
+  const remindersEl = document.getElementById('reminders');
+  let TASKS = [];
+
+  // ---- grouping: Overdue / Today / Tomorrow / This Week / Later / Undated ----
+  function endOfWeekYmd() {
+    const d = new Date();
+    const toSunday = (7 - d.getDay()) % 7; // Sunday ends the week
+    return todayYmd(toSunday);
+  }
+
+  function groupTasks(tasks) {
+    const today = todayYmd(0), tomorrow = todayYmd(1), weekEnd = endOfWeekYmd();
+    const groups = [
+      { key: 'overdue', title: 'Overdue', items: [] },
+      { key: 'today', title: 'Today', items: [] },
+      { key: 'tomorrow', title: 'Tomorrow', items: [] },
+      { key: 'week', title: 'This Week', items: [] },
+      { key: 'later', title: 'Later', items: [] },
+      { key: 'undated', title: 'Undated', items: [] },
+    ];
+    const by = Object.fromEntries(groups.map(g => [g.key, g]));
+    tasks.forEach(t => {
+      if (!t.Date) by.undated.items.push(t);
+      else if (t.Date < today) by.overdue.items.push(t);
+      else if (t.Date === today) by.today.items.push(t);
+      else if (t.Date === tomorrow) by.tomorrow.items.push(t);
+      else if (t.Date <= weekEnd) by.week.items.push(t);
+      else by.later.items.push(t);
+    });
+    // Pinned first within each group, then by date and time.
+    groups.forEach(g => g.items.sort((a, b) =>
+      (b.Pinned - a.Pinned) ||
+      String(a.Date || '').localeCompare(String(b.Date || '')) ||
+      String(a.StartTime || '99').localeCompare(String(b.StartTime || '99')) ||
+      a.Id - b.Id));
+    return groups.filter(g => g.items.length);
+  }
+
+  function whenLine(t) {
+    if (!t.Date) return '';
+    const d = parseYmd(t.Date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return [d, t.StartTime ? fmtTime(t.StartTime) : null].filter(Boolean).join(' · ');
+  }
+
+  function quickActionsHtml(t) {
+    const out = [];
+    if (t.PhoneNumber) {
+      out.push(`<a href="tel:${escapeHtml(dialable(t.PhoneNumber))}" title="Call ${escapeHtml(t.ContactName || t.PhoneNumber)}" aria-label="Call">📞</a>`);
+      out.push(`<a href="sms:${escapeHtml(dialable(t.PhoneNumber))}" title="Text" aria-label="Text">💬</a>`);
+    }
+    if (t.Date) out.push(`<button type="button" data-cal="${t.Id}" title="Add to Calendar" aria-label="Add to Calendar">📅</button>`);
+    if (t.Address) out.push(`<button type="button" data-nav="${t.Id}" title="Navigate" aria-label="Navigate">🧭</button>`);
+    return out.length ? `<div class="quick">${out.join('')}</div>` : '';
+  }
+
+  function cardHtml(t) {
+    const sub = [
+      t.ContactName || null,
+      t.City || (t.Address ? t.Address.split(',')[0] : null),
+      t.ChecklistTotal ? `☑ ${t.ChecklistDone}/${t.ChecklistTotal}` : null,
+      t.AttachmentCount ? `📎 ${t.AttachmentCount}` : null,
+      t.Repeat ? '🔁' : null,
+      t.CalendarAdded ? '📅 Added' : null,
+    ].filter(Boolean).join(' · ');
+    const when = whenLine(t);
+    return `
+      <div class="task-card ${t.Pinned ? 'pinned' : ''}">
+        <button type="button" class="check" data-done="${t.Id}" title="Mark complete" aria-label="Mark ${escapeHtml(t.Title)} complete"></button>
+        <a class="body" href="task.html?id=${t.Id}">
+          ${when ? `<div class="when">${escapeHtml(when)}</div>` : ''}
+          <div class="title">${t.Pinned ? '<span class="pin" title="Pinned">📌</span> ' : ''}${escapeHtml(t.Title)}</div>
+          ${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ''}
+        </a>
+        ${quickActionsHtml(t)}
+      </div>`;
+  }
+
+  function render() {
+    if (!TASKS.length) {
+      contentEl.innerHTML = `
+        <div class="card">
+          <h3>Nothing to do — nice.</h3>
+          <p>Add a task or appointment with <a href="edit.html">+ New</a>, or bring one in from someone else with <a href="import.html">Import</a>.</p>
+        </div>`;
+      return;
+    }
+    contentEl.innerHTML = groupTasks(TASKS).map(g => `
+      <div class="group-title ${g.key === 'overdue' ? 'overdue' : ''}">${g.title}</div>
+      ${g.items.map(cardHtml).join('')}`).join('');
+    wire();
+  }
+
+  function wire() {
+    contentEl.querySelectorAll('[data-done]').forEach(b => b.addEventListener('click', () => complete(Number(b.dataset.done), b)));
+    contentEl.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => {
+      const t = TASKS.find(x => x.Id === Number(b.dataset.nav));
+      MdwPrefs.navigate(t.Address);
+    }));
+    contentEl.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', async () => {
+      const t = TASKS.find(x => x.Id === Number(b.dataset.cal));
+      const used = await MdwPrefs.addToCalendar(calendarEventFor(t));
+      if (used) {
+        try { await postAction('setCalendarAdded', { id: t.Id }); t.CalendarAdded = true; render(); } catch (e) { /* cosmetic */ }
+      }
+    }));
+  }
+
+  async function complete(id, btn) {
+    const t = TASKS.find(x => x.Id === id);
+    btn.disabled = true;
+    btn.textContent = '✓';
+    btn.style.background = 'var(--primary)';
+    try {
+      const res = await postAction('completeTask', { id });
+      await load();
+      showStatus('');
+      if (res.NextTaskId) {
+        const next = TASKS.find(x => x.Id === res.NextTaskId);
+        info(`Done. Next "${t.Title}" is ${next ? fmtDate(next.Date, { weekday: 'short', month: 'short', day: 'numeric' }) : 'scheduled'}.`);
+      } else {
+        info(`Done — "${t.Title}" moved to Completed.`, 'Undo', async () => {
+          await postAction('reopenTask', { id });
+          await load();
+        });
+      }
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = '';
+      btn.style.background = '';
+      showStatus(errorText(e, "Couldn't complete that task. Try again."));
+    }
+  }
+
+  // A short message above the list, optionally with one action button.
+  function info(text, actionLabel, onAction) {
+    const box = document.createElement('div');
+    box.className = 'note';
+    box.style.marginBottom = '0.8rem';
+    box.innerHTML = `${escapeHtml(text)} ${actionLabel ? `<button type="button" class="btn secondary small">${actionLabel}</button>` : ''}`;
+    if (actionLabel) {
+      box.querySelector('button').addEventListener('click', async () => { box.remove(); await onAction(); });
+    }
+    remindersEl.after(box);
+    setTimeout(() => box.remove(), 8000);
+  }
+
+  // ---- reminders due now ----
+  function renderReminders(list) {
+    remindersEl.innerHTML = list.map(r => `
+      <div class="reminder" data-task="${r.TaskId}">
+        <strong>⏰ ${escapeHtml(r.Title)}</strong>
+        <div class="small muted">${r.Date ? escapeHtml(fmtDate(r.Date, { weekday: 'short', month: 'short', day: 'numeric' })) : ''}${r.StartTime ? ' · ' + fmtTime(r.StartTime) : ''}</div>
+        <div class="row">
+          <a class="btn small" href="task.html?id=${r.TaskId}">Open</a>
+          <button type="button" class="btn secondary small" data-snooze="15">15 min</button>
+          <button type="button" class="btn secondary small" data-snooze="60">1 hour</button>
+          <button type="button" class="btn secondary small" data-snooze="tomorrow">Tomorrow</button>
+          <button type="button" class="btn secondary small" data-snooze="custom">Custom…</button>
+          <button type="button" class="btn secondary small" data-dismiss>Dismiss</button>
+        </div>
+        <div class="row custom-snooze" style="display:none">
+          <input type="datetime-local" aria-label="Snooze until" style="max-width:16rem">
+          <button type="button" class="btn small" data-snooze-set>Snooze</button>
+        </div>
+      </div>`).join('');
+    remindersEl.querySelectorAll('.reminder').forEach(box => {
+      const taskId = Number(box.dataset.task);
+      box.querySelectorAll('[data-snooze]').forEach(b => b.addEventListener('click', () => {
+        if (b.dataset.snooze === 'custom') { box.querySelector('.custom-snooze').style.display = 'flex'; return; }
+        snooze(taskId, b.dataset.snooze);
+      }));
+      box.querySelector('[data-snooze-set]').addEventListener('click', () => {
+        const v = box.querySelector('input[type="datetime-local"]').value;
+        if (v) snooze(taskId, 'custom', v);
+      });
+      box.querySelector('[data-dismiss]').addEventListener('click', async () => {
+        try { await postAction('dismissReminder', { taskId }); await load(); } catch (e) { showStatus(errorText(e, "Couldn't dismiss that reminder.")); }
+      });
+    });
+  }
+
+  async function snooze(taskId, how, customAt) {
+    try {
+      await postAction('snoozeReminder', { taskId, snooze: how, customAt: customAt || '' });
+      await load();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't snooze that reminder."));
+    }
+  }
+
+  async function load() {
+    try {
+      const res = await fetchData('tasks');
+      TASKS = res.Tasks || [];
+      renderReminders(res.Reminders || []);
+      render();
+    } catch (e) {
+      remindersEl.innerHTML = '';
+      handleError(contentEl, e);
+    }
+  }
+
+  // Coming back to the app re-checks reminders and the date groups; while
+  // it stays open, check reminders every minute.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') load(); });
+  setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000);
+
+  (async () => {
+    await captureSso();
+    initPrefs();
+    await load();
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<title>Import | Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html">Tasks</a>
+      <a href="edit.html">+ New</a>
+      <a href="completed.html">Completed</a>
+      <a href="import.html" aria-current="page">Import</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>Import a task</h2>
+  <div id="content">
+    <form class="card" id="form" autocomplete="off" style="text-align:center">
+      <p style="margin-top:0">Enter the 4-character code someone gave you. You'll get your own copy of their task — checklist, attachments and all.</p>
+      <label for="code" style="margin-top:0.4rem">Transfer code</label>
+      <input type="text" id="code" class="code-input" maxlength="4" inputmode="text" autocapitalize="characters" spellcheck="false" required>
+      <div id="err" class="field-error" role="alert"></div>
+      <div class="form-actions" style="justify-content:center">
+        <button type="submit" class="btn" id="go">Import task</button>
+      </div>
+    </form>
+  </div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const input = document.getElementById('code');
+  const err = document.getElementById('err');
+
+  // Uppercase as you type; letters/digits only.
+  input.addEventListener('input', () => {
+    input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    err.textContent = '';
+  });
+
+  document.getElementById('form').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const code = input.value.trim();
+    if (code.length !== 4) { err.textContent = 'Codes are 4 characters.'; return; }
+    const btn = document.getElementById('go');
+    btn.disabled = true;
+    try {
+      const res = await postAction('redeemTransfer', { code });
+      location.href = `task.html?id=${res.TaskId}`;
+    } catch (e) {
+      btn.disabled = false;
+      if (e.message === 'not-authorized') { handleError(document.getElementById('content'), e); return; }
+      err.textContent = errorText(e, "Couldn't import right now. Try again.");
+      input.select();
+    }
+  });
+
+  (async () => {
+    await captureSso();
+    const preset = new URLSearchParams(location.search).get('code');
+    if (preset) input.value = preset.toUpperCase().slice(0, 4);
+    input.focus();
+  })();
+</script>
+</body>
+</html>

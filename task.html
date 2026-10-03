@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<title>Task | Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html">Tasks</a>
+      <a href="edit.html">+ New</a>
+      <a href="completed.html">Completed</a>
+      <a href="import.html">Import</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <div id="status"></div>
+  <div id="content">Loading&hellip;</div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const contentEl = document.getElementById('content');
+  const taskId = Number(new URLSearchParams(location.search).get('id'));
+  let T = null;
+  let shareTimer = null;
+
+  function whenHtml(t) {
+    if (!t.Date) return '<span class="muted">No date</span>';
+    const parts = [`<div class="detail-when"><strong>${escapeHtml(fmtDate(t.Date))}</strong></div>`];
+    if (t.StartTime) parts.push(`<div>${fmtTime(t.StartTime)}${t.EndTime ? ' – ' + fmtTime(t.EndTime) : ''}</div>`);
+    if (t.LeaveByTime) parts.push(`<div><strong>Leave by ${fmtTime(t.LeaveByTime)}</strong></div>`);
+    return parts.join('');
+  }
+
+  function actionsHtml(t) {
+    const a = [];
+    if (t.PhoneNumber) {
+      a.push(`<a class="action-btn" href="tel:${escapeHtml(dialable(t.PhoneNumber))}"><span class="ico">📞</span>Call</a>`);
+      a.push(`<a class="action-btn" href="sms:${escapeHtml(dialable(t.PhoneNumber))}"><span class="ico">💬</span>Text</a>`);
+    }
+    if (t.Date) a.push(`<button type="button" class="action-btn" id="act-cal"><span class="ico">📅</span>${t.CalendarAdded ? 'Added ✓ — add again' : 'Add to Calendar'}</button>`);
+    if (t.Address) a.push(`<button type="button" class="action-btn" id="act-nav"><span class="ico">🧭</span>Navigate</button>`);
+    a.push(`<button type="button" class="action-btn" id="act-share"><span class="ico">📤</span>Share Task</button>`);
+    return `<div class="actions">${a.join('')}</div>`;
+  }
+
+  function render() {
+    const t = T;
+    const contact = t.ContactName || t.PhoneNumber;
+    contentEl.innerHTML = `
+      <div class="card">
+        <h2 style="margin-top:0">${escapeHtml(t.Title)}
+          ${t.Pinned ? '<span class="badge pin">📌 Pinned</span>' : ''}
+          ${t.Completed ? `<span class="badge done">✓ Completed ${escapeHtml(fmtLocalDateTime(t.CompletedAt))}</span>` : ''}
+        </h2>
+        ${whenHtml(t)}
+        ${actionsHtml(t)}
+        <div id="share-box"></div>
+      </div>
+
+      ${contact || t.Address ? `
+      <div class="card">
+        ${contact ? `<h3>Contact</h3><div>${escapeHtml(t.ContactName)}</div><div>${escapeHtml(t.PhoneNumber)}</div>` : ''}
+        ${t.Address ? `<h3 style="margin-top:${contact ? '0.9rem' : '0'}">Address</h3>
+          <div>${escapeHtml(t.Address1)}</div>${t.Address2 ? `<div>${escapeHtml(t.Address2)}</div>` : ''}
+          <div>${escapeHtml([[t.City, t.State].filter(Boolean).join(', '), t.PostalCode].filter(Boolean).join(' '))}</div>` : ''}
+      </div>` : ''}
+
+      ${t.Checklist.length ? `
+      <div class="card">
+        <h3>Checklist <span class="muted small">${t.Checklist.filter(c => c.Done).length} of ${t.Checklist.length}</span></h3>
+        ${t.Checklist.map(c => `
+          <label class="check-item ${c.Done ? 'done' : ''}" style="margin:0;font-weight:normal">
+            <input type="checkbox" data-item="${c.Id}" ${c.Done ? 'checked' : ''}> <span>${escapeHtml(c.Description)}</span>
+          </label>`).join('')}
+      </div>` : ''}
+
+      ${t.Notes ? `<div class="card"><h3>Notes</h3><div style="white-space:pre-wrap">${escapeHtml(t.Notes)}</div></div>` : ''}
+
+      <div class="card">
+        <h3>Attachments</h3>
+        ${t.Attachments.length ? t.Attachments.map(f => `
+          <div class="file-row">
+            <span aria-hidden="true">${/pdf/i.test(f.FileType) ? '📄' : /image/i.test(f.FileType) ? '🖼️' : '📎'}</span>
+            <span class="name"><button type="button" class="link-btn" data-open="${f.Id}">${escapeHtml(f.FileName)}</button>
+              <span class="muted small">${Math.max(1, Math.round(f.FileSize / 1024))} KB</span></span>
+            <button type="button" class="icon-btn" data-remove-file="${f.Id}" aria-label="Remove ${escapeHtml(f.FileName)}" title="Remove">✕</button>
+          </div>`).join('') : '<p class="muted small" style="margin:0">None yet.</p>'}
+        <p style="margin-bottom:0">
+          <label class="btn secondary small" style="display:inline-block;margin:0.6rem 0 0;font-weight:normal">
+            + Add photo or file<input type="file" id="file-input" hidden accept="image/*,.pdf,.txt,.rtf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx">
+          </label>
+          <span id="upload-msg" class="muted small"></span>
+        </p>
+      </div>
+
+      <div class="card">
+        <dl class="kv" style="margin:0">
+          <dt>Reminder</dt><dd>${escapeHtml(reminderLabel(t.Reminder))}${t.Reminder && t.Reminder.Dismissed ? ' <span class="muted small">(dismissed)</span>' : ''}</dd>
+          <dt>Repeat</dt><dd>${escapeHtml(repeatLabel(t.Repeat))}</dd>
+        </dl>
+      </div>
+
+      <div class="form-actions">
+        ${t.Completed
+          ? '<button type="button" class="btn" id="btn-reopen">Reopen</button>'
+          : `<button type="button" class="btn" id="btn-complete">✓ Mark complete</button>`}
+        <a class="btn secondary" href="edit.html?id=${t.Id}">Edit</a>
+        <button type="button" class="btn secondary" id="btn-pin">${t.Pinned ? 'Unpin' : '📌 Pin'}</button>
+        <button type="button" class="btn danger" id="btn-delete">Delete</button>
+      </div>`;
+    wire();
+  }
+
+  function wire() {
+    const cal = document.getElementById('act-cal');
+    if (cal) cal.addEventListener('click', async () => {
+      const used = await MdwPrefs.addToCalendar(calendarEventFor(T));
+      if (used && !T.CalendarAdded) {
+        try { await postAction('setCalendarAdded', { id: T.Id }); T.CalendarAdded = true; render(); } catch (e) { /* cosmetic */ }
+      }
+    });
+    const nav = document.getElementById('act-nav');
+    if (nav) nav.addEventListener('click', () => MdwPrefs.navigate(T.Address));
+    document.getElementById('act-share').addEventListener('click', share);
+
+    contentEl.querySelectorAll('[data-item]').forEach(cb => cb.addEventListener('change', async () => {
+      const item = T.Checklist.find(c => c.Id === Number(cb.dataset.item));
+      try {
+        await postAction('toggleChecklistItem', { id: item.Id, done: cb.checked });
+        item.Done = cb.checked;
+        render();
+      } catch (e) {
+        cb.checked = !cb.checked;
+        showStatus(errorText(e, "Couldn't update that item."));
+      }
+    }));
+
+    contentEl.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', async () => {
+      const f = T.Attachments.find(x => x.Id === Number(b.dataset.open));
+      try { await openAttachment(f.Id, f.FileName); } catch (e) { showStatus("Couldn't open that file."); }
+    }));
+    contentEl.querySelectorAll('[data-remove-file]').forEach(b => b.addEventListener('click', async () => {
+      const f = T.Attachments.find(x => x.Id === Number(b.dataset.removeFile));
+      if (!confirm(`Remove ${f.FileName}?`)) return;
+      try { await postAction('deleteAttachment', { id: f.Id }); await load(); } catch (e) { showStatus(errorText(e, "Couldn't remove that file.")); }
+    }));
+    document.getElementById('file-input').addEventListener('change', async ev => {
+      const files = [...ev.target.files];
+      if (!files.length) return;
+      const msg = document.getElementById('upload-msg');
+      try {
+        for (let i = 0; i < files.length; i++) {
+          msg.textContent = `Uploading ${files[i].name}…`;
+          await uploadFile(T.Id, files[i]);
+        }
+        await load();
+      } catch (e) {
+        msg.textContent = '';
+        showStatus(errorText(e, "Couldn't upload that file."));
+      }
+    });
+
+    const done = document.getElementById('btn-complete');
+    if (done) done.addEventListener('click', async () => {
+      done.disabled = true;
+      try {
+        const res = await postAction('completeTask', { id: T.Id });
+        if (res.NextTaskId) { location.href = `task.html?id=${res.NextTaskId}&from=${T.Id}`; return; }
+        await load();
+      } catch (e) {
+        done.disabled = false;
+        showStatus(errorText(e, "Couldn't complete that task."));
+      }
+    });
+    const reopen = document.getElementById('btn-reopen');
+    if (reopen) reopen.addEventListener('click', async () => {
+      try { await postAction('reopenTask', { id: T.Id }); await load(); } catch (e) { showStatus(errorText(e, "Couldn't reopen that task.")); }
+    });
+    document.getElementById('btn-pin').addEventListener('click', async () => {
+      try { await postAction('setPinned', { id: T.Id, pinned: !T.Pinned }); await load(); } catch (e) { showStatus(errorText(e, "Couldn't update that.")); }
+    });
+    document.getElementById('btn-delete').addEventListener('click', async () => {
+      if (!confirm(`Delete "${T.Title}"? This can't be undone.`)) return;
+      try { await postAction('deleteTask', { id: T.Id }); location.href = 'index.html'; } catch (e) { showStatus(errorText(e, "Couldn't delete that task.")); }
+    });
+  }
+
+  // ---- Share Task: 4-character code, 5 minutes, single use ----
+  async function share() {
+    const box = document.getElementById('share-box');
+    box.innerHTML = '<p class="muted">Making a code…</p>';
+    try {
+      const res = await postAction('createTransfer', { taskId: T.Id });
+      const expires = Date.now() + res.ExpiresInSeconds * 1000;
+      box.innerHTML = `
+        <div class="note" style="margin-top:0.9rem">
+          <div class="code-box">
+            <div class="small muted">Task transfer code</div>
+            <div class="code" aria-live="polite">${escapeHtml(res.Code)}</div>
+            <div id="share-left" class="small"></div>
+          </div>
+          <p class="small" style="margin:0.4rem 0 0">Give this code to the other person. They open Task Tap → <strong>Import</strong> and type it in to get their own copy of this task. It works once.</p>
+        </div>`;
+      clearInterval(shareTimer);
+      const tick = () => {
+        const left = Math.max(0, Math.round((expires - Date.now()) / 1000));
+        const el = document.getElementById('share-left');
+        if (!el) { clearInterval(shareTimer); return; }
+        if (left === 0) {
+          clearInterval(shareTimer);
+          el.innerHTML = 'Expired. <button type="button" class="btn secondary small" id="share-again">New code</button>';
+          document.getElementById('share-again').addEventListener('click', share);
+          return;
+        }
+        el.textContent = `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      };
+      tick();
+      shareTimer = setInterval(tick, 1000);
+    } catch (e) {
+      box.innerHTML = '';
+      showStatus(errorText(e, "Couldn't make a share code. Try again."));
+    }
+  }
+
+  async function load() {
+    if (!taskId) { contentEl.innerHTML = '<p class="note">No task selected. <a href="index.html">Back to tasks</a></p>'; return; }
+    try {
+      const res = await fetchData('task', { id: taskId });
+      T = res.Task;
+      document.title = `${T.Title} | Task Tap`;
+      showStatus('');
+      render();
+      const from = new URLSearchParams(location.search).get('from');
+      if (from) {
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = 'Done! This is the next time it repeats.';
+        contentEl.prepend(note);
+      }
+    } catch (e) {
+      handleError(contentEl, e);
+    }
+  }
+
+  (async () => {
+    await captureSso();
+    initPrefs();
+    await load();
+  })();
+</script>
+</body>
+</html>

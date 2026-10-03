@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#13786f">
+<title>Completed | Task Tap</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <h1><a href="index.html">✅ Task Tap</a></h1>
+    <nav>
+      <a href="index.html">Tasks</a>
+      <a href="edit.html">+ New</a>
+      <a href="completed.html" aria-current="page">Completed</a>
+      <a href="import.html">Import</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>Completed</h2>
+  <div id="status"></div>
+  <div id="content">Loading&hellip;</div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/api.js?v=1"></script>
+<script>
+  const contentEl = document.getElementById('content');
+
+  function render(tasks) {
+    if (!tasks.length) {
+      contentEl.innerHTML = '<div class="card"><p class="muted" style="margin:0">Nothing completed yet.</p></div>';
+      return;
+    }
+    // Grouped by the day each was completed, newest first.
+    const groups = new Map();
+    tasks.forEach(t => {
+      const day = (t.CompletedAt || '').split(' ')[0] || 'Unknown';
+      if (!groups.has(day)) groups.set(day, []);
+      groups.get(day).push(t);
+    });
+    contentEl.innerHTML = [...groups.entries()].map(([day, list]) => `
+      <div class="group-title">${day === 'Unknown' ? 'Earlier' : escapeHtml(fmtDate(day, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' }))}</div>
+      ${list.map(t => `
+        <div class="task-card">
+          <a class="body" href="task.html?id=${t.Id}">
+            <div class="title">✓ ${escapeHtml(t.Title)}</div>
+            <div class="sub">${[
+              t.Date ? 'Due ' + fmtDate(t.Date, { month: 'short', day: 'numeric' }) : null,
+              t.CompletedAt ? 'done ' + fmtTime(t.CompletedAt.split(' ')[1]) : null,
+              t.ChecklistTotal ? `☑ ${t.ChecklistDone}/${t.ChecklistTotal}` : null,
+              t.SeriesId ? '🔁 repeating' : null,
+            ].filter(Boolean).map(escapeHtml).join(' · ')}</div>
+          </a>
+          <button type="button" class="btn secondary small" data-reopen="${t.Id}">Reopen</button>
+        </div>`).join('')}`).join('');
+    contentEl.querySelectorAll('[data-reopen]').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { await postAction('reopenTask', { id: Number(b.dataset.reopen) }); await load(); }
+      catch (e) { b.disabled = false; showStatus(errorText(e, "Couldn't reopen that task.")); }
+    }));
+  }
+
+  async function load() {
+    try {
+      const res = await fetchData('completedTasks');
+      render(res.Tasks || []);
+    } catch (e) {
+      handleError(contentEl, e);
+    }
+  }
+
+  (async () => {
+    await captureSso();
+    await load();
+  })();
+</script>
+</body>
+</html>
